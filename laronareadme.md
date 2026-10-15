@@ -331,6 +331,332 @@ def main():
         else:
             action(students)
 
+"""Section D: Functions, search/update, and error handling.
+ 
+Same data model as Section C:
+    students = {"Alice": {"Math": [90, 85], "English": [78], "Science": [88]}}
+ 
+Design:
+  * "Core" functions (parse_grade, calculate_average, add_student, ...) do one
+    job, take everything they need as parameters, and RAISE ValueError or
+    KeyError with an informative message when something is wrong.
+  * "ui_" functions handle the keyboard, call the core functions inside
+    try/except, and print those messages, so the program never crashes
+    on bad input.
+"""
+ 
+SUBJECTS = ["Math", "English", "Science"]  # at least three; edit to add more
+ 
+ 
+# =====================================================================
+# Validation and calculation (core, reusable)
+# =====================================================================
+ 
+def parse_grade(text):
+    """Convert text to a grade in [0, 100]. Raise ValueError if it is invalid."""
+    try:
+        grade = float(text)
+    except (TypeError, ValueError):
+        raise ValueError(f"'{text}' is not a number.") from None
+    if not 0 <= grade <= 100:  # also rejects 'nan'
+        raise ValueError(f"{text} is out of range; grades must be between 0 and 100.")
+    return grade
+ 
+ 
+def calculate_average(grades):
+    """Average of a list of grades. Raise ValueError if there are none."""
+    if not grades:
+        raise ValueError("there are no grades to average.")
+    return sum(grades) / len(grades)
+ 
+ 
+def calculate_student_average(record):
+    """Average over every grade in every subject of one student's record."""
+    all_grades = [g for grades in record.values() for g in grades]
+    return calculate_average(all_grades)
+ 
+ 
+def find_student(students, name):
+    """Return the stored name matching `name` (case-insensitive).
+ 
+    Raise KeyError if there is no such student.
+    """
+    wanted = name.strip().lower()
+    for stored in students:
+        if stored.lower() == wanted:
+            return stored
+    raise KeyError(f"No student named '{name.strip()}' was found.")
+ 
+ 
+def validate_subject(subject):
+    """Return the canonical subject name (case-insensitive) or raise ValueError."""
+    for known in SUBJECTS:
+        if known.lower() == subject.strip().lower():
+            return known
+    raise ValueError(f"Unknown subject '{subject.strip()}'. Choose from: {', '.join(SUBJECTS)}.")
+ 
+ 
+# =====================================================================
+# Data operations (core, reusable)
+# =====================================================================
+ 
+def check_new_name(students, name):
+    """Raise ValueError if `name` is blank or already used."""
+    if not name.strip():
+        raise ValueError("Student name cannot be empty.")
+    try:
+        find_student(students, name)
+    except KeyError:
+        return  # good: the name is free
+    raise ValueError(f"'{name.strip()}' already exists. Use update to change their grades.")
+ 
+ 
+def add_student(students, name, record):
+    """Add a student. `record` maps each subject to a non-empty list of grades.
+ 
+    Raise ValueError for a blank/duplicate name, missing subjects, or bad grades.
+    """
+    check_new_name(students, name)
+    name = name.strip()
+ 
+    clean = {}
+    for subject in SUBJECTS:
+        grades = record.get(subject)
+        if not grades:
+            raise ValueError(f"Missing grades for {subject}.")
+        clean[subject] = [parse_grade(g) for g in grades]
+    students[name] = clean
+ 
+ 
+def update_grades(students, name, subject, grades, replace=False):
+    """Add `grades` to a student's subject list, or replace the list.
+ 
+    Raise KeyError (no such student) or ValueError (bad subject/grades).
+    """
+    stored = find_student(students, name)
+    subject = validate_subject(subject)
+    if not grades:
+        raise ValueError("No grades were provided.")
+    clean = [parse_grade(g) for g in grades]
+    if replace:
+        students[stored][subject] = clean
+    else:
+        students[stored].setdefault(subject, []).extend(clean)
+ 
+ 
+def remove_student(students, name):
+    """Remove a student by name. Raise KeyError if not found."""
+    del students[find_student(students, name)]
+ 
+ 
+# =====================================================================
+# Display
+# =====================================================================
+ 
+def format_grades(grades):
+    return ", ".join(f"{g:g}" for g in grades) if grades else "no data"
+ 
+ 
+def display_student(name, record):
+    """Print one student's grades per subject and their overall average."""
+    print(f"\n{name}")
+    print("-" * 40)
+    for subject in SUBJECTS:
+        grades = record.get(subject)  # .get: a missing subject is not a crash
+        if grades:
+            print(f"{subject:<10} {format_grades(grades)}   (avg {calculate_average(grades):.2f})")
+        else:
+            print(f"{subject:<10} no data")
+    try:
+        print(f"Overall average: {calculate_student_average(record):.2f}")
+    except ValueError:
+        print("Overall average: n/a (no grades recorded)")
+ 
+ 
+def display_students_summary(students):
+    """Print a table of every student's per-subject averages and overall average."""
+    if not students:
+        print("  There are no students to show yet.")
+        return
+ 
+    def cell(grades):
+        try:
+            return f"{calculate_average(grades):>8.2f}"
+        except ValueError:
+            return f"{'n/a':>8}"
+ 
+    name_w = max(len("Name"), *(len(n) for n in students))
+    header = f"{'Name':<{name_w}} | " + " | ".join(f"{s:>8}" for s in SUBJECTS) + f" | {'Average':>8}"
+    line = "-" * len(header)
+    print("\n" + line)
+    print(header)
+    print(line)
+    for name, record in students.items():
+        subject_cells = " | ".join(cell(record.get(s, [])) for s in SUBJECTS)
+        all_grades = [g for grades in record.values() for g in grades]
+        print(f"{name:<{name_w}} | {subject_cells} | {cell(all_grades)}")
+    print(line)
+    print("(subject columns show each subject's average)")
+ 
+ 
+def display_subject(students, subject):
+    """Print every student's grades for one subject."""
+    print(f"\nAll {subject} grades")
+    print("-" * 40)
+    for name, record in students.items():
+        print(f"{name:<20} {format_grades(record.get(subject))}")
+ 
+ 
+# =====================================================================
+# Keyboard input (with try/except retry loops)
+# =====================================================================
+ 
+def read_grade(prompt):
+    """Prompt until a valid grade is entered; show why each attempt failed."""
+    while True:
+        try:
+            return parse_grade(input(prompt).strip())
+        except ValueError as error:
+            print(f"  Invalid grade: {error}")
+ 
+ 
+def read_grades_for_subject(name, subject):
+    """Read one or more grades; an empty entry finishes (at least one required)."""
+    grades = [read_grade(f"  {subject} grade for {name} (0-100): ")]
+    while True:
+        text = input(f"  Another {subject} grade? (enter to finish, or type it): ").strip()
+        if text == "":
+            return grades
+        try:
+            grades.append(parse_grade(text))
+        except ValueError as error:
+            print(f"  Invalid grade: {error}")
+ 
+ 
+def read_subject():
+    """Prompt until a known subject is entered; blank cancels (returns None)."""
+    print("Subjects: " + ", ".join(SUBJECTS))
+    while True:
+        text = input("Subject (blank to cancel): ").strip()
+        if not text:
+            return None
+        try:
+            return validate_subject(text)
+        except ValueError as error:
+            print(f"  {error}")
+ 
+ 
+# =====================================================================
+# Menu actions (UI layer: catch errors and report them)
+# =====================================================================
+ 
+def ui_add_student(students):
+    name = input("New student's name: ").strip()
+    try:
+        check_new_name(students, name)  # fail fast, before asking for every grade
+        record = {s: read_grades_for_subject(name, s) for s in SUBJECTS}
+        add_student(students, name, record)
+        print(f"  Added {name}.")
+    except ValueError as error:
+        print(f"  Could not add student: {error}")
+ 
+ 
+def search_and_update(students):
+    """Find a student by name, show them, then optionally update their grades."""
+    try:
+        name = find_student(students, input("Student to search for: "))
+    except KeyError as error:
+        print(f"  {error.args[0]}")
+        return
+ 
+    display_student(name, students[name])
+ 
+    if input("\nUpdate this student's grades? (y/n): ").strip().lower() != "y":
+        return
+    subject = read_subject()
+    if subject is None:
+        print("  Cancelled.")
+        return
+    mode = input("  (a)dd grades or (r)eplace all grades? ").strip().lower()
+    if mode not in ("a", "r"):
+        print("  Cancelled: please answer 'a' or 'r'.")
+        return
+    try:
+        if mode == "a":
+            grades = [read_grade("  New grade (0-100): ")]
+        else:
+            grades = read_grades_for_subject(name, subject)
+        update_grades(students, name, subject, grades, replace=(mode == "r"))
+        print(f"  Updated {name}'s {subject} grades.")
+        display_student(name, students[name])
+    except (KeyError, ValueError) as error:
+        print(f"  Could not update: {error}")
+ 
+ 
+def ui_remove_student(students):
+    try:
+        remove_student(students, input("Student to remove: "))
+        print("  Student removed.")
+    except KeyError as error:
+        print(f"  {error.args[0]}")
+ 
+ 
+def ui_view_subject(students):
+    if not students:
+        print("  There are no students to show yet.")
+        return
+    subject = read_subject()
+    if subject is not None:
+        display_subject(students, subject)
+ 
+ 
+def ui_summary(students):
+    display_students_summary(students)
+ 
+ 
+# =====================================================================
+# Main menu
+# =====================================================================
+ 
+MENU = """
+=== Grade Manager ===
+1. Add a student
+2. Search for a student (and update grades)
+3. Remove a student
+4. View all grades for a subject
+5. View students summary
+0. Quit
+"""
+ 
+ACTIONS = {
+    "1": ui_add_student,
+    "2": search_and_update,
+    "3": ui_remove_student,
+    "4": ui_view_subject,
+    "5": ui_summary,
+}
+ 
+ 
+def main():
+    students = {}
+    try:
+        while True:
+            print(MENU)
+            choice = input("Choose an option: ").strip()
+            if choice == "0":
+                break
+            action = ACTIONS.get(choice)
+            if action is None:
+                print("  Invalid option, please enter a number from the menu.")
+            else:
+                action(students)
+    except (EOFError, KeyboardInterrupt):
+        print()  # Ctrl-D / Ctrl-C: leave cleanly
+    print("Goodbye!")
+ 
+ 
+if __name__ == "__main__":
+    main()
 
 if __name__ == "__main__":
     main()
